@@ -7,12 +7,9 @@ class DetectionPresetTrain:
                  hflip_prob=0.5,
                  mean=(123., 117., 104.)):
         if data_augmentation == 'hflip':
-            self.transforms = T.Compose([
-                T.RandomHorizontalFlip(p=hflip_prob),
-                T.ToTensor(),
-                T.Normalize(mean=[103.530, 116.280, 123.675],
-                            std=[1.0, 1.0, 1.0]),
-            ])
+            self.transforms = T.Compose(
+                [T.RandomHorizontalFlip(p=hflip_prob),
+                 T.ToTensor()])
 
         elif data_augmentation == 'ssd':
             self.transforms = T.Compose([

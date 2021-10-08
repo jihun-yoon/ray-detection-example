@@ -20,7 +20,6 @@ the number of epochs should be adapted so that we have the same number of iterat
 import datetime
 import os
 import time
-from pprint import pprint
 
 import torch
 import torch.utils.data
@@ -28,7 +27,7 @@ import torchvision
 import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
 
-from coco_utils import get_coco, get_coco_kp, get_small_coco
+from coco_utils import get_coco, get_coco_kp, get_hsdb_vision_coco
 
 from group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from engine import train_one_epoch, evaluate
@@ -40,15 +39,18 @@ import ray
 import ray.util.sgd.v2 as sgd
 from ray.util.sgd.v2.trainer import Trainer
 from ray import tune
-from ray.tune.integration.mlflow import MLflowLoggerCallback, mlflow_mixin
+from ray.tune.integration.mlflow import MLflowLoggerCallback
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune import CLIReporter
+
+import numpy as np
 
 
 def get_dataset(name, image_set, transform, data_path):
     paths = {
-        "coco": (data_path, get_small_coco, 91),
-        "coco_kp": (data_path, get_coco_kp, 2)
+        "coco": (data_path, get_coco, 91),
+        "coco_kp": (data_path, get_coco_kp, 2),
+        "get_hsdb_vision_coco": (data_path, get_hsdb_vision_coco, 32),
     }
     p, ds_fn, num_classes = paths[name]
 
@@ -69,9 +71,11 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         '--data-path',
         default=
-        '/host_server/hdd_ext/hdd_ext_tmp/usr/hutom-admin/data/small-coco/small_coco',
+        '/host_server/raid/jihunyoon/hSDB-vision/new_hSDB_vision/hsdb-vision/gastrectomy-40',
         help='dataset')
-    parser.add_argument('--dataset', default='coco', help='dataset')
+    parser.add_argument('--dataset',
+                        default='get_hsdb_vision_coco',
+                        help='dataset')
     parser.add_argument('--model',
                         default='maskrcnn_resnet50_fpn',
                         help='model')
@@ -129,12 +133,7 @@ def get_args_parser(add_help=True):
     parser.add_argument('--data-augmentation',
                         default="hflip",
                         help='data augmentation policy (default: hflip)')
-    parser.add_argument(
-        "--distributed",
-        dest="distributed",
-        help="Use distributed training",
-        action="store_true",
-    )
+
     parser.add_argument(
         "--sync-bn",
         dest="sync_bn",
@@ -153,15 +152,6 @@ def get_args_parser(add_help=True):
         help="Use pre-trained models from the modelzoo",
         action="store_true",
     )
-
-    # distributed training parameters
-    parser.add_argument('--world-size',
-                        default=1,
-                        type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--dist-url',
-                        default='env://',
-                        help='url used to set up distributed training')
 
     return parser
 
@@ -204,7 +194,7 @@ def get_data(config):
 
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test,
-        batch_size=1,
+        batch_size=8,
         sampler=test_sampler,
         num_workers=config["workers"],
         collate_fn=utils.collate_fn)
@@ -253,19 +243,6 @@ def train_func(config):
         raise RuntimeError(
             "Invalid lr scheduler '{}'. Only MultiStepLR and CosineAnnealingLR "
             "are supported.".format(config["lr_scheduler"]))
-    """
-    #TODO: reseume from SGD
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-        args.start_epoch = checkpoint['epoch'] + 1
-
-    if args.test_only:
-        evaluate(model, data_loader_test, device=device)
-        return
-    """
 
     print("Start training")
     sgd_report_results = []
@@ -284,19 +261,17 @@ def train_func(config):
                 'args': config,
                 'epoch': epoch
             }
-            utils.save_on_master(
-                checkpoint,
-                os.path.join(config["output_dir"],
-                             'model_{}.pth'.format(epoch)))
-            utils.save_on_master(
-                checkpoint, os.path.join(config["output_dir"],
-                                         'checkpoint.pth'))
 
         # evaluate after every epoch
         coco_evaluator = evaluate(model, data_loader_test, device=device)
+        coco_stats = coco_evaluator.get_stats()
         sgd_report_result = {
             "loss": metric_logger.meters["loss"].value,
-            "epoch": epoch
+            "epoch": epoch,
+            "val_bbox_mAP": coco_stats["bbox"][0],
+            "val_mask_mAP": coco_stats["segm"][0],
+            "val_avg_mAP":
+            np.mean([coco_stats["bbox"][0], coco_stats["segm"][0]])
         }
         sgd.report(**sgd_report_result)
         sgd_report_results.append(sgd_report_result)
@@ -311,18 +286,27 @@ def train_func(config):
 
 
 def main(args):
-    #utils.init_distributed_mode(args)
-
     config = {
-        "batch_size": 2,
-        "epochs": 26,
-        "lr": 0.005,
-        "momentum": 0.9,
-        "weight_decay": 0.0001,
-        "lr_scheduler": "multisteplr",
-        "lr_step_size": 8,
-        "lr_steps": [16, 22],
-        "lr_gamma": 0.1
+        "batch_size":
+        tune.choice([8, 16]),
+        "epochs":
+        tune.choice([13, 20]),
+        "lr":
+        tune.sample_from(lambda spec: tune.uniform(lower=0.01, upper=0.02)
+                         if spec.config.batch_size == 8 else tune.uniform(
+                             lower=0.02, upper=0.03)
+                         if spec.config.batch_size == 16 else 0.02),
+        "momentum":
+        0.9,
+        "weight_decay":
+        0.0001,
+        "lr_scheduler":
+        "multisteplr",
+        "lr_steps":
+        tune.sample_from(lambda spec: [8, 11] if spec.config.epochs == 13 else
+                         [12, 16] if spec.config.epochs == 20 else [8, 11]),
+        "lr_gamma":
+        0.1
     }
 
     config.update(vars(args))
@@ -335,15 +319,19 @@ def main(args):
                       use_gpu=config["use_gpu"])
     Trainable = trainer.to_tune_trainable(train_func)
 
-    scheduler = ASHAScheduler(metric="loss",
-                              mode="min",
-                              max_t=3,
-                              grace_period=1,
-                              reduction_factor=2)
+    scheduler = ASHAScheduler(
+        metric="val_avg_mAP",
+        mode="max",
+        #max_t=10,
+        grace_period=1,
+        reduction_factor=2)
 
     reporter = CLIReporter()
     reporter.add_metric_column("epoch")
     reporter.add_metric_column("loss")
+    reporter.add_metric_column("val_bbox_mAP")
+    reporter.add_metric_column("val_mask_mAP")
+    reporter.add_metric_column("val_avg_mAP")
 
     analysis = tune.run(Trainable,
                         num_samples=config["num_samples"],
@@ -357,7 +345,7 @@ def main(args):
                                 experiment_name=config["experiment_name"],
                                 save_artifact=True)
                         ])
-    results = analysis.get_best_config(metric="loss", mode="min")
+    results = analysis.get_best_config(metric="val_avg_mAP", mode="max")
     print(results)
 
     return results
