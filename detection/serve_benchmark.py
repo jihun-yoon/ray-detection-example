@@ -52,7 +52,6 @@ async def fetch(session, data):
     async with session.post("http://127.0.0.1:8000/api",
                             data=data) as response:
         response = await response.json(content_type=None)
-        #assert response == "ok", response
 
 
 @ray.remote
