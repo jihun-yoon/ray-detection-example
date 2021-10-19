@@ -60,6 +60,7 @@ class InferenceClient():
     def __init__(self):
         self.session = aiohttp.ClientSession()
 
+    # TODO: add ready
     async def do_queries(self, num, data):
         # Query a batch of images
         for _ in range(num):
@@ -149,6 +150,7 @@ async def trial(num_replicas, max_batch_size, max_concurrent_queries,
 
     clients = [InferenceClient.remote() for _ in range(NUM_CLIENTS)]
 
+    # TODO: add ready
     async def many_clients():
         ray.get([
             c.do_queries.remote(CALLS_PER_BATCH, test_image_bytes)
