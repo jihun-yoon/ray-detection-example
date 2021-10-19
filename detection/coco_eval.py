@@ -32,8 +32,7 @@ class CocoEvaluator:
         for iou_type in self.iou_types:
             results = self.prepare(predictions, iou_type)
             with redirect_stdout(io.StringIO()):
-                coco_dt = COCO.loadRes(self.coco_gt,
-                                       results) if results else COCO()
+                coco_dt = COCO.loadRes(self.coco_gt, results) if results else COCO()
             coco_eval = self.coco_eval[iou_type]
 
             coco_eval.cocoDt = coco_dt
@@ -44,10 +43,8 @@ class CocoEvaluator:
 
     def synchronize_between_processes(self):
         for iou_type in self.iou_types:
-            self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type],
-                                                      2)
-            create_common_coco_eval(self.coco_eval[iou_type], self.img_ids,
-                                    self.eval_imgs[iou_type])
+            self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type], 2)
+            create_common_coco_eval(self.coco_eval[iou_type], self.img_ids, self.eval_imgs[iou_type])
 
     def accumulate(self):
         for coco_eval in self.coco_eval.values():
@@ -57,12 +54,6 @@ class CocoEvaluator:
         for iou_type, coco_eval in self.coco_eval.items():
             print(f"IoU metric: {iou_type}")
             coco_eval.summarize()
-
-    def get_stats(self):
-        stats = {}
-        for iou_type, coco_eval in self.coco_eval.items():
-            stats[iou_type] = coco_eval.stats
-        return stats
 
     def prepare(self, predictions, iou_type):
         if iou_type == "bbox":
@@ -84,12 +75,17 @@ class CocoEvaluator:
             scores = prediction["scores"].tolist()
             labels = prediction["labels"].tolist()
 
-            coco_results.extend([{
-                "image_id": original_id,
-                "category_id": labels[k],
-                "bbox": box,
-                "score": scores[k],
-            } for k, box in enumerate(boxes)])
+            coco_results.extend(
+                [
+                    {
+                        "image_id": original_id,
+                        "category_id": labels[k],
+                        "bbox": box,
+                        "score": scores[k],
+                    }
+                    for k, box in enumerate(boxes)
+                ]
+            )
         return coco_results
 
     def prepare_for_coco_segmentation(self, predictions):
@@ -108,20 +104,23 @@ class CocoEvaluator:
             labels = prediction["labels"].tolist()
 
             rles = [
-                mask_util.encode(
-                    np.array(mask[0, :, :, np.newaxis],
-                             dtype=np.uint8,
-                             order="F"))[0] for mask in masks
+                mask_util.encode(np.array(mask[0, :, :, np.newaxis], dtype=np.uint8, order="F"))[0]
+                for mask in masks
             ]
             for rle in rles:
                 rle["counts"] = rle["counts"].decode("utf-8")
 
-            coco_results.extend([{
-                "image_id": original_id,
-                "category_id": labels[k],
-                "segmentation": rle,
-                "score": scores[k],
-            } for k, rle in enumerate(rles)])
+            coco_results.extend(
+                [
+                    {
+                        "image_id": original_id,
+                        "category_id": labels[k],
+                        "segmentation": rle,
+                        "score": scores[k],
+                    }
+                    for k, rle in enumerate(rles)
+                ]
+            )
         return coco_results
 
     def prepare_for_coco_keypoint(self, predictions):
@@ -137,12 +136,17 @@ class CocoEvaluator:
             keypoints = prediction["keypoints"]
             keypoints = keypoints.flatten(start_dim=1).tolist()
 
-            coco_results.extend([{
-                "image_id": original_id,
-                "category_id": labels[k],
-                'keypoints': keypoint,
-                "score": scores[k],
-            } for k, keypoint in enumerate(keypoints)])
+            coco_results.extend(
+                [
+                    {
+                        "image_id": original_id,
+                        "category_id": labels[k],
+                        'keypoints': keypoint,
+                        "score": scores[k],
+                    }
+                    for k, keypoint in enumerate(keypoints)
+                ]
+            )
         return coco_results
 
 
@@ -186,5 +190,4 @@ def create_common_coco_eval(coco_eval, img_ids, eval_imgs):
 def evaluate(imgs):
     with redirect_stdout(io.StringIO()):
         imgs.evaluate()
-    return imgs.params.imgIds, np.asarray(imgs.evalImgs).reshape(
-        -1, len(imgs.params.areaRng), len(imgs.params.imgIds))
+    return imgs.params.imgIds, np.asarray(imgs.evalImgs).reshape(-1, len(imgs.params.areaRng), len(imgs.params.imgIds))

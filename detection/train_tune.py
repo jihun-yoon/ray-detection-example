@@ -1,22 +1,4 @@
-r"""PyTorch Detection Training.
 
-To run in a multi-gpu environment, use the distributed launcher::
-
-    python -m torch.distributed.launch --nproc_per_node=$NGPU --use_env \
-        train.py ... --world-size $NGPU
-
-The default hyperparameters are tuned for training on 8 gpus and 2 images per gpu.
-    --lr 0.02 --batch-size 2 --world-size 8
-If you use different number of gpus, the learning rate should be changed to 0.02/8*$NGPU.
-
-On top of that, for training Faster/Mask R-CNN, the default hyperparameters are
-    --epochs 26 --lr-steps 16 22 --aspect-ratio-group-factor 3
-
-Also, if you train Keypoint R-CNN, the default hyperparameters are
-    --epochs 46 --lr-steps 36 43 --aspect-ratio-group-factor 3
-Because the number of images is smaller in the person keypoint subset of COCO,
-the number of epochs should be adapted so that we have the same number of iterations.
-"""
 import datetime
 import os
 import time
@@ -65,44 +47,44 @@ def get_transform(train, data_augmentation):
 
 def get_args_parser(add_help=True):
     import argparse
-    parser = argparse.ArgumentParser(description='PyTorch Detection Training',
+    parser = argparse.ArgumentParser(description="PyTorch Detection Training",
                                      add_help=add_help)
 
     parser.add_argument(
-        '--data-path',
+        "--data-path",
         default=
-        '/host_server/raid/jihunyoon/hSDB-vision/new_hSDB_vision/hsdb-vision/gastrectomy-40',
-        help='dataset')
-    parser.add_argument('--dataset',
-                        default='get_hsdb_vision_coco',
-                        help='dataset')
-    parser.add_argument('--model',
-                        default='maskrcnn_resnet50_fpn',
-                        help='model')
-    parser.add_argument('-j',
-                        '--workers',
+        "/host_server/raid/jihunyoon/hSDB-vision/new_hSDB_vision/hsdb-vision/gastrectomy-40",
+        help="dataset")
+    parser.add_argument("--dataset",
+                        default="get_hsdb_vision_coco",
+                        help="dataset")
+    parser.add_argument("--model",
+                        default="maskrcnn_resnet50_fpn",
+                        help="model")
+    parser.add_argument("-j",
+                        "--workers",
                         default=4,
                         type=int,
-                        metavar='N',
-                        help='number of data loading workers (default: 4)')
+                        metavar="N",
+                        help="number of data loading workers (default: 4)")
     parser.add_argument("--address",
                         required=False,
                         type=str,
                         default="auto",
                         help="the address to use for Ray")
-    parser.add_argument('-r',
-                        '--ray-workers',
+    parser.add_argument("-r",
+                        "--ray-workers",
                         default=2,
                         type=int,
-                        help='number of ray workers (default: 2)')
+                        help="number of ray workers (default: 2)")
     parser.add_argument("--use-gpu",
                         action="store_true",
                         default=False,
                         help="Enables GPU training")
-    parser.add_argument('--print-freq',
+    parser.add_argument("--print-freq",
                         default=20,
                         type=int,
-                        help='print frequency')
+                        help="print frequency")
     parser.add_argument("--num-samples",
                         type=int,
                         default=1,
@@ -115,24 +97,24 @@ def get_args_parser(add_help=True):
                         required=True,
                         type=str,
                         help="experiment name for MLflow tracking server")
-    parser.add_argument('--output-dir', default='.', help='path where to save')
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
-    parser.add_argument('--start_epoch',
+    parser.add_argument("--output-dir", default=".", help="path where to save")
+    parser.add_argument("--resume", default="", help="resume from checkpoint")
+    parser.add_argument("--start_epoch",
                         default=0,
                         type=int,
-                        help='start epoch')
-    parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
-    parser.add_argument('--rpn-score-thresh',
+                        help="start epoch")
+    parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
+    parser.add_argument("--rpn-score-thresh",
                         default=None,
                         type=float,
-                        help='rpn score threshold for faster-rcnn')
-    parser.add_argument('--trainable-backbone-layers',
+                        help="rpn score threshold for faster-rcnn")
+    parser.add_argument("--trainable-backbone-layers",
                         default=None,
                         type=int,
-                        help='number of trainable layers of backbone')
-    parser.add_argument('--data-augmentation',
+                        help="number of trainable layers of backbone")
+    parser.add_argument("--data-augmentation",
                         default="hflip",
-                        help='data augmentation policy (default: hflip)')
+                        help="data augmentation policy (default: hflip)")
 
     parser.add_argument(
         "--sync-bn",
@@ -233,15 +215,15 @@ def train_func(config):
                                 weight_decay=config["weight_decay"])
 
     config["lr_scheduler"] = config["lr_scheduler"].lower()
-    if config["lr_scheduler"] == 'multisteplr':
+    if config["lr_scheduler"] == "multisteplr":
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=config["lr_steps"], gamma=config["lr_gamma"])
-    elif config["lr_scheduler"] == 'cosineannealinglr':
+    elif config["lr_scheduler"] == "cosineannealinglr":
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=config["epochs"])
     else:
         raise RuntimeError(
-            "Invalid lr scheduler '{}'. Only MultiStepLR and CosineAnnealingLR "
+            "Invalid lr scheduler "{}". Only MultiStepLR and CosineAnnealingLR "
             "are supported.".format(config["lr_scheduler"]))
 
     print("Start training")
@@ -255,11 +237,11 @@ def train_func(config):
         lr_scheduler.step()
         if config["output_dir"]:
             checkpoint = {
-                'model': model_without_ddp.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'lr_scheduler': lr_scheduler.state_dict(),
-                'args': config,
-                'epoch': epoch
+                "model": model_without_ddp.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "lr_scheduler": lr_scheduler.state_dict(),
+                "args": config,
+                "epoch": epoch
             }
 
         # evaluate after every epoch
@@ -280,7 +262,7 @@ def train_func(config):
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    print("Training time {}".format(total_time_str))
 
     return sgd_report_results
 
