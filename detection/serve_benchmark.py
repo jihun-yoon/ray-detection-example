@@ -171,7 +171,7 @@ async def main():
                                                                  [10, 10, 10]]:
         await trial(num_replicas, max_batch_size, max_concurrent_queries,
                     result_json)
-    dump_json(result_json, "./serve_benchmark_gpu2.json")
+    dump_json(result_json, "./serve_benchmark_gpu.json")
 
 
 if __name__ == "__main__":
