@@ -1,6 +1,6 @@
 # ray-detection-example
 
-This repository is for training an Mask R-CNN model with Ray SGD, Tune and online/batch serving with Ray Serve in "How Hutom uses Ray and PyTorch to Scale Surgical Video Analysis and Review" blog. Training Mask R-CNN code is based on [PyTorch official detection reference training scripts](https://github.com/pytorch/vision/tree/master/references/detection) and Following codes are major changes to use Ray SGD and Tune.
+This repository is for training an Mask R-CNN model with [Ray SGD](https://docs.ray.io/en/latest/raysgd/v2/raysgd.html), [Tune](https://docs.ray.io/en/latest/tune/index.html) and online/batch serving with [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) in "How Hutom uses Ray and PyTorch to Scale Surgical Video Analysis and Review" blog. Training Mask R-CNN code is based on [PyTorch official detection reference training scripts](https://github.com/pytorch/vision/tree/master/references/detection) and Following codes are major changes to use Ray SGD and Tune.
 
 
 1. Using Ray SGD wrapper on `torch.nn.parallel.DistributedDataParallel`.
