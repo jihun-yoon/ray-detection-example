@@ -1,178 +1,127 @@
-import sys
 import time
-import json
-from typing import List
+import numpy as np
 
-import asyncio
-import aiohttp
-import requests
+from typing import List
 from starlette.requests import Request
+from io import BytesIO
+from PIL import Image
+import requests
+import asyncio
+import httpx
 
 import ray
 from ray import serve
 from ray.serve.utils import logger
 
-from io import BytesIO
-from PIL import Image
-import numpy as np
-
 import torch
 import torchvision
 import transforms as T
 
-NUM_CLIENTS = 10
-CALLS_PER_BATCH = 10
-
-config = {"num_gpus": 0.1}
+config = {"num_gpus": 0.5}
+MAX_CONCURRENT_QUERIES = 1000
 
 
-def dump_json(data, fpath):
-    with open(fpath, "w") as write_json:
-        json.dump(data, write_json)
-
-
-async def timeit(name, fn):
-    start = time.time()
-    while time.time() - start < 1:
-        await fn()
-    # real run
-    stats = []
-    for _ in range(4):
-        start = time.time()
-        await fn()
-        end = time.time()
-        stats.append((end - start))
-
-    logger.info("\t{} {} +- {} sec".format(name, round(np.mean(stats), 2),
-                                           round(np.std(stats), 2)))
-    return {"mean": round(np.mean(stats), 2), "std": round(np.std(stats), 2)}
-
-
-async def fetch(session, data):
-    async with session.post("http://127.0.0.1:8000/api",
-                            data=data) as response:
-        response = await response.json(content_type=None)
-
-
-@ray.remote
-class InferenceClient():
-    def __init__(self):
-        self.session = aiohttp.ClientSession()
-
-    # TODO: add ready
-    async def do_queries(self, num, data):
-        # Query a batch of images
-        for _ in range(num):
-            await fetch(self.session, data)
-
-
-async def trial(num_replicas, max_batch_size, max_concurrent_queries,
-                result_json):
-
-    test_image_bytes = requests.get(
-        "http://farm8.staticflickr.com/7353/9879082044_66c4f5a6fb_z.jpg"
-    ).content
-    test_image_size = round(sys.getsizeof(test_image_bytes) / 1000., 2)
-
-    trial_key_base = (
-        f"calls_per_batch:{CALLS_PER_BATCH}/replica:{num_replicas}/batch_size:{max_batch_size}/"
-        f"concurrent_queries:{max_concurrent_queries}/"
-        f"input_data_size(KB):{test_image_size}")
-
-    logger.info(f"num_replicas={num_replicas},"
-                f"max_batch_size={max_batch_size},"
-                f"max_concurrent_queries={max_concurrent_queries},"
-                f"input_data_size(KB)={test_image_size}")
-
-    @serve.deployment(name="api",
-                      max_concurrent_queries=max_concurrent_queries,
-                      ray_actor_options={"num_gpus": config["num_gpus"]},
-                      num_replicas=num_replicas)
+def deploy(num_replicas=1, max_batch_size=1):
+    @serve.deployment(route_prefix="/detection",
+                      ray_actor_options={"num_gpus": 0.5},
+                      num_replicas=num_replicas,
+                      max_concurrent_queries=MAX_CONCURRENT_QUERIES)
     class DetectionModelEndpoint:
         def __init__(self):
             self.model = torchvision.models.detection.__dict__[
-                "maskrcnn_resnet50_fpn"](
-                    pretrained=True).cuda().eval()  # CUDA/CPU
+                "maskrcnn_resnet50_fpn"](pretrained=True).eval().cuda()
             self.preprocessor = T.ToTensor()
 
+        def __del__(self):
+            # Release GPU memory
+            del self.model
+
         @serve.batch(max_batch_size=max_batch_size)
-        async def batch_handler(self, reqs: List):
-            results = []
-            for req in reqs:
-                # Image Loading
-                image_payload_bytes = await req.body()
-
+        async def __call__(self, starlette_requests):
+            batch_size = len(starlette_requests)
+            pil_images = []
+            for request in starlette_requests:
+                image_payload_bytes = await request.body()
                 pil_image = Image.open(BytesIO(image_payload_bytes))
-                pil_images = [pil_image]
+                pil_images.append(pil_image)
 
-                # Image Preprocessing
-                input_tensor = torch.cat([
-                    self.preprocessor(i)[0] for i in pil_images
-                ]).cuda()  # CUDA/CPU
+            input_tensors = torch.cat(
+                [self.preprocessor(i)[0].unsqueeze(0) for i in pil_images])
+            input_tensors = input_tensors.cuda()
+            with torch.no_grad():
+                outputs = self.model(input_tensors)
+                torch.cuda.synchronize()
 
-                # Inference
-                with torch.no_grad():
-                    output_tensor = self.model([input_tensor])
-
-                # Prediction Postprocessing
+            results = []
+            # Prediction Postprocessing
+            for i in range(batch_size):
                 result = {}
-                for k in output_tensor[0]:
-                    result[k] = output_tensor[0][k].cpu().detach().numpy(
-                    )  # CUDA/CPU
-                # With score threshold
-                #for idx, score in enumerate(output_tensor[0]["scores"]):
-                #    if score > 0.9:
-                #        idxs.append(idx)
-                #for k in output_tensor[0]:
-                #    result[k] = output_tensor[0][k][idxs].cpu().numpy()
-
+                for k in outputs[i]:
+                    result[k] = outputs[i][k].cpu().detach().numpy()
                 results.append(result)
 
             return results
 
-        async def __call__(self, req: Request):
-            return await self.batch_handler(req)
-
     DetectionModelEndpoint.deploy()
-    routes = requests.get("http://127.0.0.1:8000/-/routes").json()
-    assert "/api" in routes, routes
 
-    async with aiohttp.ClientSession() as session:
 
-        async def single_client():
-            for _ in range(CALLS_PER_BATCH):
-                await fetch(session, test_image_bytes)
+test_image_bytes = requests.get(
+    "http://farm8.staticflickr.com/7353/9879082044_66c4f5a6fb_z.jpg").content
 
-        single_client_avg_tps = await timeit("single client", single_client)
-        key = "num_client:1/" + trial_key_base
-        result_json.update({key: single_client_avg_tps})
 
-    clients = [InferenceClient.remote() for _ in range(NUM_CLIENTS)]
+async def benchmark(num_iters_per_client, num_clients):
+    async def client():
+        client_timing = []
+        async with httpx.AsyncClient(timeout=None) as client:
+            for _ in range(num_iters_per_client):
+                start = time.time()
+                resp = await client.post("http://localhost:8000/detection",
+                                         data=test_image_bytes)
+                end = time.time()
+                client_timing.append(end - start)
+        return client_timing
 
-    # TODO: add ready
-    async def many_clients():
-        ray.get([
-            c.do_queries.remote(CALLS_PER_BATCH, test_image_bytes)
-            for c in clients
-        ])
-
-    multi_client_avg_tps = await timeit("{} clients".format(len(clients)),
-                                        many_clients)
-    key = f"num_client:{len(clients)}/" + trial_key_base
-    result_json.update({key: multi_client_avg_tps})
-
-    logger.info(result_json)
+    all_timings = await asyncio.gather(*[client() for _ in range(num_clients)])
+    return np.array(all_timings).flatten()
 
 
 async def main():
-    result_json = {}
-    for num_replicas, max_batch_size, max_concurrent_queries in [[5, 1, 5],
-                                                                 [5, 5, 5],
-                                                                 [10, 1, 10],
-                                                                 [10, 10, 10]]:
-        await trial(num_replicas, max_batch_size, max_concurrent_queries,
-                    result_json)
-    dump_json(result_json, "./serve_benchmark_gpu.json")
+    # Scalingout Becnhmark
+    result = []
+    for num_replicas in [1, 2, 4]:
+        deploy(num_replicas)
+        for num_clients in [1, 16]:
+            num_iters_per_client = 20
+            try:
+                timings = await benchmark(num_iters_per_client, num_clients)
+                percentiles = np.percentile(
+                    np.array(timings).flatten(), [50, 90])
+            except httpx.ReadTimeout:
+                percentiles = [None, None, None]
+            result.append({
+                "num_replicas": num_replicas,
+                "num_clients": num_clients,
+                "p50_latency": percentiles[0],
+                "p90_latency": percentiles[1],
+            })
+            print(result[-1])
+
+    # Batching Benchmark
+    result = []
+    for max_batch_size in [1, 4, 8]:
+        deploy(num_replicas=1, max_batch_size=max_batch_size)
+        try:
+            timings = await benchmark(num_iters_per_client=20, num_clients=16)
+            percentiles = np.percentile(np.array(timings).flatten(), [50, 90])
+        except httpx.ReadTimeout:
+            percentiles = [None, None, None]
+        result.append({
+            "num_replicas": num_replicas,
+            "max_batch_size": max_batch_size,
+            "p50_latency": percentiles[0],
+            "p90_latency": percentiles[1],
+        })
+        print(result[-1])
 
 
 if __name__ == "__main__":
